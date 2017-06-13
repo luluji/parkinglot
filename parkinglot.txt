@@ -1,0 +1,499 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#define MAXP 10	 //停车场容量 
+#define MAXCAR 30 	 //车辆总数 
+#define LN 6	  	 // 车牌号字符串 
+#define YUANPER 1	 //计费单价 
+
+typedef char string[LN] ;
+typedef string license_m; 
+enum doing{nothing,arrival,leaving,parking};		// 
+enum position_m{nowhere,in_parkinglot,on_road};
+
+typedef struct 				//记录时间 
+{
+	int hour;
+	int min;
+	int sec;
+ } time_m;
+ 
+
+typedef struct				//用于生成初始数据message及作为停车场record的一部分 
+{
+ 	position_m position; 	//位置状态 in_parkinglot or on_road		
+ 	int posnum;				//记录在停车场或便道上的序号 
+ 	license_m license; 		//车牌号：两个英文字母+三个数字 
+ 	time_m time_parking;	//进入停车场时间 
+ 	time_m time_arrival;	//到达时间 
+ 	time_m time_leaving;	//离开时间 
+}car_m;
+ 
+typedef struct				//message结构体 
+{
+ 	license_m license;		//车牌号 
+ 	time_m key_time;		//时间 
+ 	doing status;			//状态：到达或离去 
+}message_m;
+ 
+typedef struct 				//停车场栈 
+{					
+ 	int carnum[MAXP];		//数组中记录停车场record中车的序号 
+ 	int top;				
+}parkinglot_m;
+ 
+ typedef struct node		//队列节点 
+ {
+ 	int carnum;				//记录停车场record中车的序号 
+ 	struct node *next;
+  } r_node;
+  
+typedef struct				//便道队列 
+{
+	r_node *front;
+	r_node *rear;
+}road_m;
+
+typedef struct				//停车场record 
+{
+	car_m car[MAXCAR];		
+	int count;				//记录车总数 
+}record_m;
+
+/*全局变量*/ 
+car_m allcar[MAXCAR];		//用于生成message数据 
+message_m message[2*MAXCAR];// message数组 
+parkinglot_m parkinglot;	//停车场栈 
+road_m road;				//便道队列 
+record_m record;			//停车场记录 
+
+
+time_m get_current_time(void)		//获得当前时间 
+{
+	time_t t;
+	time_m tar;
+	struct tm *p;
+	t=time(NULL);
+	p=localtime(&t);
+	tar.hour=p->tm_hour;
+	tar.min=p->tm_min;
+	tar.sec=p->tm_sec;
+	return tar;
+}
+
+void create_license(license_m s,int r)		//生成车牌号，前两位为大写字母，后面为数字 
+{
+	int i,n;
+//	srand(time(NULL)+r);
+	for(i=0;i<LN-1;i++)
+	{
+		if(i<2)
+			s[i]='A'+rand()%26;
+		else
+			s[i]='0'+rand()%10;
+	}
+	s[LN-1]='\0';
+	return ;
+}
+
+time_m create_arrival_time(time_m current_time,int r)	//根据当前时间生成到达时间 
+{
+	time_m t=current_time;
+	srand(time(NULL)+r);
+	t.sec+=rand()%30+5;
+	if(t.sec>=60)
+	{
+		t.sec-=60;
+		t.min++;
+	}
+	if(t.min>=60)
+	{
+		t.min-=60;
+		t.hour++;
+	}
+	return t;
+}
+
+time_m create_leaving_time(time_m arrival_time,int r)	//根据到达时间生成离开时间 
+{
+	time_m t=arrival_time;
+	srand(time(NULL)+r);
+	t.sec+=rand()%30;
+	if(t.sec>=60)
+	{
+		t.sec-=60;
+		t.min++;
+	}
+	if(t.min>=60)
+	{
+		t.min-=60;
+		t.hour++;
+	}
+	return t;
+}
+
+void init_data()							//生成allcar数据：车牌号，到达时间，离开时间 
+{
+	int i,j=1,k,f;
+	car_m temp_car;
+	string lic;
+	time_m a_t,c_t=get_current_time();
+	
+	for(i=0;i<MAXCAR;i++)
+	{
+		f=0;
+		while(f==0&&j++)
+		{
+			f=1;
+			create_license(lic,i+j);
+			for(k=0;k<=i;k++)
+			{
+				if(strcmp(lic,allcar[i].license)==0)
+				{
+					f=0;
+					break;
+				}				
+			}	
+		}
+		strcpy(allcar[i].license,lic);						//生成车牌号 
+		a_t=create_arrival_time(c_t,i);						//使用当前时间生成到达时间 
+		allcar[i].time_arrival=a_t;
+		allcar[i].time_leaving=create_leaving_time(a_t,i+j);	//使用到达时间生成离开时间	
+	}
+}
+
+int compare_time(time_m t1,time_m t2)			//比较时间，返回两者的差值，单位毫秒 
+{
+	int a1,a2;
+	a1=t1.hour*3600+t1.min*60+t1.sec;
+	a2=t2.hour*3600+t2.min*60+t2.sec;
+	return a1-a2;
+}
+
+void insert_sort()							//message直接插入排序 
+{
+	int i,k;
+	message_m temp;
+	for(i=1;i<2*MAXCAR;i++)
+	{
+		temp=message[i];
+		k=i-1;
+		while(k>=0&&compare_time(message[k].key_time,temp.key_time)>0)
+		{
+			message[k+1]=message[k];
+			k--;
+		}
+		message[k+1]=temp;
+	}	
+	return ;
+}
+
+void init_message() 					//生成message数据 
+{
+	int i;
+	for(i=0;i<MAXCAR;i++)				//复制allcar数据到message 
+	{
+		strcpy(message[2*i].license,allcar[i].license);
+		message[2*i].key_time=allcar[i].time_arrival;
+		message[2*i].status=arrival;
+		strcpy(message[2*i+1].license,allcar[i].license);
+		message[2*i+1].key_time=allcar[i].time_leaving;
+		message[2*i+1].status=leaving;
+	}
+	insert_sort();				//排序 
+	return ;
+}
+
+void print_message(message_m m)		//打印message 
+{
+		printf("%s\t",m.license);
+		if(m.status==arrival)
+			printf("到达  ");
+		if(m.status==leaving)
+			printf("离开  ");
+		printf("time:%3d%3d%3d\t",m.key_time.hour,
+							      m.key_time.min,
+							      m.key_time.sec);		
+}
+
+void print_car()					//输出停车场、便道所有车辆 
+{
+	int i;
+	r_node *p;
+	printf("停车场："); 
+	for(i=0;i<=parkinglot.top;i++)
+	{
+		printf(" %s ",record.car[parkinglot.carnum[i]].license);
+	}
+	printf("\n  便道："); 
+	p=road.front;
+	while(p!=NULL)
+	{
+		printf(" %s ",record.car[p->carnum].license);
+		p=p->next;
+	}
+	printf("\n\n\n");	
+}
+
+void parking_in_parkinglot(message_m m,int k)				//将车停在parkinglot 
+{
+//	printf("parking_in_parkinglot ");
+	parkinglot.top++;
+	parkinglot.carnum[parkinglot.top]=k;
+	record.car[k].position=in_parkinglot;
+	record.car[k].posnum=parkinglot.top;
+	record.car[k].time_parking=m.key_time;	
+	//输出parkinglot位置 
+	printf("停在停车场%d号位\n\n",record.car[k].posnum+1);
+}
+
+void parking_on_road(message_m m,int k)
+{
+	r_node *p,*q;	
+	record.car[k].position=on_road;
+	p=(r_node*)malloc(sizeof(r_node));
+	p->carnum=k;
+	p->next=NULL;
+	if(road.rear==NULL)
+	{
+		road.front=road.rear=p;
+		record.car[k].posnum=1;
+	}
+	else
+	{
+		road.rear->next=p;
+		road.rear=p;
+		q=road.front;
+		while(q->next!=p)
+			q=q->next;
+		record.car[k].posnum=record.car[q->carnum].posnum+1;
+	}
+	//输出road位置 
+	printf("停在便道%d号位\n\n",record.car[k].posnum);
+}
+
+void arrival_task(message_m m,int k)			//车辆到达 
+{
+//	printf("arrival_task ");
+	
+	if(parkinglot.top<MAXP-1)
+		parking_in_parkinglot(m,k);
+	else
+		parking_on_road(m,k);		
+}
+
+void charge(int t)						//计费 
+{
+//	printf("charge ");
+	printf("收费：%d元\n\n",t*YUANPER);
+}
+
+void leaving_from_parkinglot(message_m m,int k)	//从停车场离开 
+{
+//	printf(" leaving_from_parkinglot ");
+	int parking_time=0,pl=0,i=0,flag=0,temp[MAXP];
+	r_node *p;
+	parking_time=compare_time(record.car[k].time_leaving,record.car[k].time_parking);
+	while(parkinglot.carnum[pl]!=k)
+		pl++;
+//	while(pl<parkinglot.top)
+//	{
+//		record.car[parkinglot.carnum[pl+1]].posnum--;
+//		parkinglot.carnum[pl]=parkinglot.carnum[pl+1];
+//		pl++;
+//	}
+//	parkinglot.top--;
+	//让开车道
+	if(parkinglot.top>pl)
+		flag=1;
+	flag&&printf("车"); 
+	while(parkinglot.top>pl)
+	{
+		printf("%s ",record.car[parkinglot.carnum[parkinglot.top]].license);
+		temp[i]=parkinglot.carnum[parkinglot.top];
+		parkinglot.top--;
+		i++;
+	}
+	flag&&printf("让出车道  "); 
+	//车离开 
+	printf("车%s离开，",record.car[parkinglot.carnum[parkinglot.top]].license);
+	printf("收费：%d元 ",parking_time*YUANPER);	
+	parkinglot.top--;
+	i--;
+	//其余车归位 
+	flag&&printf(" 其余车归位  "); 
+	while(i>=0)
+	{
+		parkinglot.top++;
+		parkinglot.carnum[parkinglot.top]=temp[i];
+		record.car[parkinglot.carnum[parkinglot.top]].posnum=parkinglot.top;
+		i--;
+	}
+	if(road.rear!=NULL)
+	{
+		parkinglot.top++;
+		parkinglot.carnum[parkinglot.top]=road.front->carnum;
+		record.car[parkinglot.carnum[parkinglot.top]].posnum=parkinglot.top;
+		record.car[parkinglot.carnum[parkinglot.top]].position=in_parkinglot;
+		record.car[parkinglot.carnum[parkinglot.top]].time_parking=m.key_time;
+		//车进入停车场
+		printf("车%s进入停车场\n\n",record.car[parkinglot.carnum[parkinglot.top]].license); 
+		if(road.front==road.rear)
+			road.front=road.rear=NULL;
+		else 
+			road.front=road.front->next;
+		p=road.front;
+		while(p!=NULL)
+		{
+			record.car[p->carnum].posnum--;
+			p=p->next;
+		}
+	}
+	else
+		printf("\n\n");
+//	charge(parking_time);
+}
+
+void leaving_from_road(message_m m,int k)	//从便道离开 
+{
+//	printf(" leaving_from_road ");
+	r_node *pre=NULL,*p=NULL;
+	pre=NULL;
+	p=road.front;
+	while(p->carnum!=k)
+	{
+		pre=p;
+		p=p->next;
+	}
+	if(p==road.front)				//对比一下书上的代码 
+		road.front=p->next;
+	if(p==road.rear)
+		road.rear=pre;
+	if(pre!=NULL)
+		pre->next=p->next;
+	free(p);
+	if(pre==NULL)
+		pre=road.front; 
+	else
+		pre=pre->next;
+	while(pre!=NULL)
+	{
+		record.car[pre->carnum].posnum--;
+		pre=pre->next;
+	}
+	printf("从便道离去，不收费\n\n");	
+	return ;	
+} 
+
+void leaving_task(message_m m,int k)	//车辆离开 
+{
+//	printf("leaving_task ");	
+	if(record.car[k].position==on_road)
+		leaving_from_road(m,k);
+	else
+		leaving_from_parkinglot(m,k);
+}
+
+void assign_tasks(message_m m,int k)		//任务分配 
+{
+//	printf("assign_tasks ");
+	if(m.status==arrival)
+		arrival_task(m,k);
+	else
+		leaving_task(m,k);
+}
+
+int make_record(message_m m)		//根据message生成记录record，并返回车辆在record中的序号 
+{
+//	printf(" make_record ");
+	int i,k=0;
+	if(m.status==arrival)
+	{
+		k=++record.count;
+		strcpy(record.car[k].license,m.license);
+		record.car[k].time_arrival=m.key_time;	
+	}
+	else	
+		for(i=0;i<=record.count;i++)
+		{
+			if(strcmp(record.car[i].license,m.license)==0)
+			{
+				k=i;
+				record.car[i].time_leaving=m.key_time;
+				break;
+			}		
+		}
+//	printf(" k=%d ",k);
+	return k;
+}
+
+void parking_manage()					//扫描message，停车，收费，离开，打印信息 
+{
+	int i=0,j,key; 
+//	for(j=0;j<MAXCAR;j++)
+//	{
+//		record.car[j].time_parking.hour=record.car[j].time_parking.min
+//									   =record.car[j].time_parking.sec
+//									   =0;
+//	}
+	record.count=-1;
+	parkinglot.top=-1;
+	road.front=road.rear=NULL;
+	while(i<2*MAXCAR)
+	{
+		if(compare_time(message[i].key_time,get_current_time())<=0)
+		{
+			print_message(message[i]);
+			key=make_record(message[i]);
+			assign_tasks(message[i],key);
+			print_car();
+			i++;
+		}
+	}
+	printf("over!\n");
+}
+
+int main()
+{
+	init_data();				
+	init_message();
+	parking_manage();
+//生成message数组 ，排序 
+//扫描message，停车，收费，离开，打印信息 
+//
+//test  time
+//	time_m t=get_current_time();
+//	printf("h:%d\nm:%d\ns:%d\n",temp.hour,temp.min,temp.sec);
+
+//test allcar
+//	int i;
+//	for(i=0;i<MAXCAR;i++)
+//	{
+//		printf("%s\n",allcar[i].license);
+//		printf("time:%3d%3d%3d\n",allcar[i].time_arrival.hour,
+//								  allcar[i].time_arrival.min,
+//								  allcar[i].time_arrival.sec);
+//		printf("time:%3d%3d%3d\n\n",allcar[i].time_leaving.hour,
+//								  allcar[i].time_leaving.min,
+//								  allcar[i].time_leaving.sec);
+//	}
+
+// test message
+//	int i;
+//	for(i=0;i<2*MAXCAR;i++)
+//	{
+//		printf("%s\n",message[i].license);
+//		printf("time:%3d%3d%3d\n",message[i].key_time.hour,
+//									message[i].key_time.min,
+//									message[i].key_time.sec);
+//		if(message[i].status==arrival)
+//			printf("arrival\n\n");
+//		if(message[i].status==leaving)
+//			printf("leaving\n\n");
+//	}
+	
+}
+
+	
