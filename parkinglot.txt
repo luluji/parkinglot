@@ -3,8 +3,8 @@
 #include <string.h>
 #include <time.h>
 
-#define MAXP 10	 //停车场容量 
-#define MAXCAR 30 	 //车辆总数 
+#define MAXP 5	 //停车场容量 
+#define MAXCAR 20 	 //车辆总数 
 #define LN 6	  	 // 车牌号字符串 
 #define YUANPER 1	 //计费单价 
 
@@ -213,7 +213,7 @@ void print_message(message_m m)		//打印message
 			printf("到达  ");
 		if(m.status==leaving)
 			printf("离开  ");
-		printf("time:%3d%3d%3d\t",m.key_time.hour,
+		printf("time:%3d%3d%3d\t\t",m.key_time.hour,
 							      m.key_time.min,
 							      m.key_time.sec);		
 }
